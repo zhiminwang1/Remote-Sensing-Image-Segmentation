@@ -141,6 +141,29 @@ def ASPP_Model(input,atrous_rates):
 
     return x
 
+def MASPP_Model(input,atrous_rates):
+    input_shape = input.get_shape().as_list()
+    _,h,w,filters  = input_shape
+    out_filters = filters // 8
+    rate1, rate2, rate3 = tuple(atrous_rates)
+
+    b0 = Conv2D(out_filters,1,padding='same', use_bias=False)(input)
+    b0 = Activation('relu')(b0)
+    b0 = BatchNormalization(epsilon=1e-5)(b0)
+
+    b1 = SepConv_BN(b0,out_filters,atrous_rate=rate1)
+    b2 = SepConv_BN(b1,out_filters,atrous_rate=rate2)
+    b3 = SepConv_BN(b2,out_filters,atrous_rate=rate3)
+    b4 = AveragePooling2D(pool_size=(h,w))(input)
+
+    b4 = Conv2D(out_filters, (1, 1), padding='same',use_bias=False, name='image_pooling')(b4)
+    b4 = BatchNormalization(axis=3)(b4)
+    b4 = Activation('relu')(b4)
+    b4 = Lambda(lambda x: tf.compat.v1.image.resize(x, (h,w),method='bilinear', align_corners=True))(b4)
+
+    x = Concatenate()([b0, b1, b2, b3, b4])
+
+    return x
 
 def cfam_resnet(height, width, channel, classes,blocks=[3,4,6,3],atrous_rate=(6, 12, 18)):
     input = Input(shape=(height, width, channel))
@@ -178,8 +201,8 @@ def cfam_resnet(height, width, channel, classes,blocks=[3,4,6,3],atrous_rate=(6,
         else:
             conv5 = bottleneck_Block(conv5, 2048, dilation=(2, 2),name='block4_{}'.format(i+1))
     
-    feat_aspp = ASPP_Model(conv5,atrous_rates=atrous_rate)
-    aspp = Conv2d_BN(feat_aspp,256,1)
+    feat_aspp = MASPP_Model(conv5,atrous_rates=atrous_rate)
+    maspp = Conv2d_BN(feat_aspp,256,1)
 
     attention1 = Conv2d_BN(conv5,256,1)
     attention1 = cfam_module(attention1,6,256,128)
@@ -187,7 +210,7 @@ def cfam_resnet(height, width, channel, classes,blocks=[3,4,6,3],atrous_rate=(6,
     attention2 = Conv2d_BN(conv4,256,1)
     attention2 = cfam_module(attention2,6,256,128)
 
-    x = Concatenate()([aspp,attention1,attention2])
+    x = Concatenate()([maspp,attention1,attention2])
     x = Conv2d_BN(x,128,1)
     skip_size = tf.keras.backend.int_shape(conv2)
     x = Lambda(lambda xx: tf.compat.v1.image.resize(xx, skip_size[1:3],method='bilinear', align_corners=True))(x)
